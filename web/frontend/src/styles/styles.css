@@ -4045,6 +4045,37 @@ html.sidebar-init-collapsed .system-btn {
   justify-content: space-between;
 }
 
+.activity-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.activity-delete-btn.btn-pill.btn-compact {
+  padding-inline: 12px;
+  color: var(--danger);
+  border-color: transparent;
+}
+
+.activity-delete-btn:hover:not(:disabled):not(.is-loading) {
+  color: var(--danger-strong);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+[data-theme="dark"] .activity-delete-btn.btn-ghost {
+  color: var(--danger);
+}
+
+[data-theme="dark"] .activity-delete-btn.btn-ghost:hover:not(:disabled):not(.is-loading) {
+  color: var(--danger-strong);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+}
+
 .inline-feedback {
   font-size: 13px;
   font-weight: 600;
@@ -4684,6 +4715,11 @@ html.sidebar-init-collapsed .system-btn {
     opacity var(--motion-fast) var(--motion-ease),
     transform var(--motion-fast) var(--motion-ease-out),
     box-shadow var(--motion-base) var(--motion-ease);
+}
+
+.action-cell {
+  min-width: 126px;
+  white-space: nowrap;
 }
 
 .time-pill {

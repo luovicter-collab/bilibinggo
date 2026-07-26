@@ -37,6 +37,55 @@ test.describe("Binggo smoke @smoke", () => {
     await expect(page.locator("#activities-body")).toBeVisible();
   });
 
+  test("2b removes an activity from the list and automatic targets", async ({ page, request }) => {
+    await gotoOverview(page);
+    await openActivities(page);
+
+    const row = page.locator("#activities-body tr[data-dynamic-id]").first();
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    const dynamicId = await row.getAttribute("data-dynamic-id");
+    expect(dynamicId).toBeTruthy();
+
+    let deleteRequests = 0;
+    page.on("request", (req) => {
+      if (req.method() === "DELETE" && req.url().includes("/api/activities/")) {
+        deleteRequests += 1;
+      }
+    });
+
+    await row.locator("[data-activity-delete]").click();
+    await expect(page.locator("#app-confirm-modal")).toBeVisible();
+    await expect(page.locator("#app-confirm-yes")).toHaveClass(/btn-danger/);
+    await page.locator("#app-confirm-cancel").click();
+    await expect(page.locator("#app-confirm-modal")).toBeHidden();
+    expect(deleteRequests).toBe(0);
+
+    await row.locator("[data-activity-delete]").click();
+    const deleted = page.waitForResponse(
+      (res) =>
+        res.request().method() === "DELETE" &&
+        res.url().endsWith(`/api/activities/${dynamicId}`),
+      { timeout: 10_000 },
+    );
+    await page.locator("#app-confirm-yes").click();
+    expect((await deleted).status()).toBe(200);
+
+    await expect(page.locator(`[data-dynamic-id="${dynamicId}"]`)).toHaveCount(0);
+    await expect(page.locator(".toast-message").filter({ hasText: "活动已删除" })).toBeVisible();
+
+    const activities = await request.get("/api/activities");
+    expect(activities.ok()).toBeTruthy();
+    const payload = await activities.json();
+    expect(
+      payload.items.some((item: { dynamic_id?: string }) => item.dynamic_id === dynamicId),
+    ).toBe(false);
+    expect(
+      payload.triple_targets.items.some(
+        (item: { dynamic_id?: string }) => item.dynamic_id === dynamicId,
+      ),
+    ).toBe(false);
+  });
+
   test("3a AUTH gate blocks refresh_status before request", async ({ page, request }) => {
     // 前端 requireSetup 在未登录时直接 toast，不发 POST（与现网行为一致）
     await setE2EState(request, { account: "logged_out", llm: "not_ready" });

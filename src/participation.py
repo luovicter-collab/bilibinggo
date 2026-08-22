@@ -221,7 +221,9 @@ def participate_five_action_lottery(
             )
             _persist_result(result=result, persist=persist, dry_run=dry_run)
             return result
-        sender_uid = int(notice.get("sender_uid") or 0) or None
+        # notice.sender_uid 理论上是 int，但接口偶发返回字符串/异常值；
+        # 裸 int() 会让整个参与流程以未处理异常崩溃，走 _safe_int 兜底。
+        sender_uid = _safe_int(notice.get("sender_uid") or 0) or None
 
     try:
         actions, context = execute_full_participation(

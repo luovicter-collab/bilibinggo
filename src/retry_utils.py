@@ -19,6 +19,10 @@ def retry_call(
     for attempt in range(max(1, attempts)):
         try:
             return fn()
+        except (KeyboardInterrupt, SystemExit):
+            # 退出类异常必须立即上抛：重试它们只会让用户在按住 Ctrl+C 时
+            # 还要等完整个退避睡眠序列。
+            raise
         except BaseException as exc:
             last_error = exc
             if attempt >= attempts - 1:

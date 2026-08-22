@@ -87,6 +87,13 @@ def _extract_dynamic_additional(item: dict) -> dict:
     return {}
 
 
+def _safe_int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def extract_reserve_total_from_detail(item: dict) -> int | None:
     """从动态详情中提取预约人数（预约抽奖在 B 站页面展示的热度）。"""
     reserve = (_extract_dynamic_additional(item).get("reserve") or {})
@@ -182,7 +189,9 @@ def _fetch_opus_detail_item(client: BilibiliClient, dynamic_id: str) -> dict | N
 def is_upower_dynamic(item: dict | None) -> bool:
     if not item:
         return False
-    additional = ((item.get("modules") or {}).get("module_dynamic") or {}).get("additional") or {}
+    # modules 可能是 dynamic/detail 的字典结构，也可能是 opus/detail 原始的
+    # 列表结构；统一走 _extract_dynamic_additional 兼容两种形状。
+    additional = _extract_dynamic_additional(item)
     return bool(
         additional.get("upower_lottery")
         or additional.get("type") == "ADDITIONAL_TYPE_UPOWER_LOTTERY"
@@ -275,8 +284,7 @@ def resolve_reserve_business(
     if item is None:
         item = fetch_dynamic_detail(client, dynamic_id)
     if item:
-        additional = ((item.get("modules") or {}).get("module_dynamic") or {}).get("additional") or {}
-        reserve = additional.get("reserve") or {}
+        reserve = _extract_dynamic_additional(item).get("reserve") or {}
         rid = reserve.get("rid")
         if rid:
             return str(rid), 10
@@ -304,13 +312,12 @@ def fetch_reserve_button_status(
         item = fetch_dynamic_detail(client, dynamic_id)
     if not item:
         return None
-    additional = ((item.get("modules") or {}).get("module_dynamic") or {}).get("additional") or {}
-    reserve = additional.get("reserve") or {}
+    reserve = _extract_dynamic_additional(item).get("reserve") or {}
     button = reserve.get("button") or {}
-    status = button.get("status")
+    status = _safe_int_or_none(button.get("status"))
     if status is None:
         return None
-    return int(status) == RESERVE_RESERVED_STATUS
+    return status == RESERVE_RESERVED_STATUS
 
 
 def fetch_notice_for_interact(client: BilibiliClient, dynamic_id: str) -> tuple[dict, int, str] | None:

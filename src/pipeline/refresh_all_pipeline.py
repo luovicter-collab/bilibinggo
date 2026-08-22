@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Literal
 
 from src.activity_store import append_activities, known_activity_ids
+from src.app_logging import get_logger
 from src.bilibili_client import BilibiliClient
 from src.lottery_enricher import (
     ENRICH_SKIP_REASON,
@@ -20,6 +21,8 @@ from src.pipeline.status_step import apply_initial_status
 from src.sources.common import CheckResult, normalize_activity_id
 
 ProgressCallback = Callable[[int, int, str], None]
+
+logger = get_logger("pipeline")
 
 
 @dataclass
@@ -94,7 +97,18 @@ def run_new_links_pipeline(
     with BilibiliClient() as shared_client:
         done = 0
         for dynamic_id in dynamic_ids:
-            outcome = classify_new_link(shared_client, dynamic_id)
+            try:
+                outcome = classify_new_link(shared_client, dynamic_id)
+            except Exception as exc:
+                # 单条动态分类失败不应中断整个流水线：记入跳过并继续，
+                # 避免一条坏链接（如已删专栏/临时的网络或 LLM 异常）导致后续新链接全部丢失。
+                reason = "分类失败"
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                done += 1
+                logger.warning("动态 %s 分类失败，已跳过：%s", dynamic_id, exc)
+                if on_progress:
+                    on_progress(done, total, "分类进度")
+                continue
             done += 1
             if outcome.skipped:
                 reason = outcome.skip_reason or "skipped"

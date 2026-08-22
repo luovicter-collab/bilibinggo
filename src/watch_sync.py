@@ -4,11 +4,14 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Callable
 
+from src.app_logging import get_logger
 from src.bilibili_client import BilibiliClient
 from src.sources.common import is_valid_dynamic_id, normalize_activity_id, opus_link
 from src.state_store import DATA_DIR, get_watch_last_synced_at
 from src.watch_feed import collect_forward_links_for_user
 from src.watch_users import WatchUser, list_watch_users
+
+logger = get_logger("watch_sync")
 
 WATCH_SOURCE_ID = "WATCH"
 OUTPUT_PATH = DATA_DIR / "output" / "watch_latest.json"
@@ -88,6 +91,8 @@ def sync_watch_forwards(
 
     window_links: list[str] = []
     user_results: list[WatchUserScanResult] = []
+    users_failed: list[dict] = []
+    users_ok = 0
 
     with BilibiliClient(timeout=30.0) as client:
         for index, user in enumerate(watch_users, start=1):
@@ -112,9 +117,23 @@ def sync_watch_forwards(
                     )
                 )
                 window_links.extend(links)
+                users_ok += 1
             except Exception as exc:
+                # 单个用户扫描失败不应中断整个同步：记录失败并继续扫描其余用户，
+                # 避免一条坏数据（如用户主页失效）导致已扫描用户的链接全部丢弃。
                 message = str(exc).strip() or "扫描失败"
-                raise RuntimeError(f"扫描用户 {user.name}（{user.mid}）失败：{message}") from exc
+                user_results.append(
+                    WatchUserScanResult(
+                        mid=user.mid,
+                        name=user.name,
+                        ok=False,
+                        link_count=0,
+                        forward_count=0,
+                        message=message,
+                    )
+                )
+                users_failed.append({"mid": user.mid, "name": user.name, "error": message})
+                logger.warning("扫描用户 %s（%s）失败，已跳过：%s", user.name, user.mid, message)
             if index < total:
                 time.sleep(USER_REQUEST_DELAY)
 
@@ -127,8 +146,8 @@ def sync_watch_forwards(
         window_end=window_end,
         activity_links=activity_links,
         users_total=total,
-        users_ok=total,
-        users_failed=[],
+        users_ok=users_ok,
+        users_failed=users_failed,
         user_results=[item.to_dict() for item in user_results],
         link_count=len(activity_links),
     )

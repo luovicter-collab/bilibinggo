@@ -412,16 +412,42 @@ def run_action(
                     source_id,
                     check_update,
                     save_result,
-                ): source_id
+                ): (index, source_id)
                 for index, (source_id, check_update, save_result) in enumerate(DS_HANDLERS, start=1)
             }
             for future in as_completed(futures):
                 _raise_if_cancelled(cancel_event)
-                source_id = futures[future]
+                index, source_id = futures[future]
                 try:
                     ds_payloads.append(future.result())
                 except Exception as exc:
-                    raise RuntimeError(f"{source_id} 检查失败：{exc}") from exc
+                    # 单个数据源检查失败不应中断整个一键更新：记入失败结果并继续，
+                    # 避免某个数据源（如专栏被删返回 404）导致其余数据源检查结果全部丢弃。
+                    message = str(exc).strip() or "检查失败"
+                    logger.warning("数据源 %s 检查失败，已跳过：%s", source_id, exc)
+                    failed_result = CheckResult(
+                        source_id=source_id,
+                        updated=False,
+                        container_url="",
+                        container_id="",
+                        title="",
+                        published_at=0,
+                        previous_container_url=None,
+                        activity_links=[],
+                        checked_at=int(time.time()),
+                    )
+                    failed_log_line = f"【{source_id}】检查失败，已跳过：{message}"
+                    failed_payload = {
+                        "source_id": source_id,
+                        "updated": False,
+                        "link_count": 0,
+                        "saved": False,
+                        "log_line": failed_log_line,
+                        "detail": "",
+                        "status_text": "检查失败，已跳过",
+                        "error": message,
+                    }
+                    ds_payloads.append((index, failed_payload, failed_log_line, failed_result))
 
         ds_payloads.sort(key=lambda item: item[0])
         ds_check_results: list[CheckResult] = []

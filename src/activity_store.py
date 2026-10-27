@@ -104,9 +104,17 @@ def _upsert_activities(session, items: list[dict], *, updated_at: int) -> None:
 def _replace_all_unlocked(activities: list[dict]) -> None:
     now = int(time.time())
     with session_scope() as session:
+        from src.db.models import DeletedActivityRow
+
+        deleted_ids = set(session.exec(select(DeletedActivityRow.dynamic_id)).all())
+        kept = [
+            item
+            for item in activities
+            if str(item.get("dynamic_id") or "").strip() not in deleted_ids
+        ]
         session.exec(delete(ActivityRow))
         session.flush()
-        _upsert_activities(session, activities, updated_at=now)
+        _upsert_activities(session, kept, updated_at=now)
 
 
 def _seed_activities_if_empty() -> bool:
@@ -178,11 +186,14 @@ def append_activities(new_items: list[dict]) -> int:
         return 0
     with _activity_lock:
         with session_scope() as session:
+            from src.db.models import DeletedActivityRow
+
             existing_ids = set(session.exec(select(ActivityRow.dynamic_id)).all())
+            deleted_ids = set(session.exec(select(DeletedActivityRow.dynamic_id)).all())
             to_add: list[dict] = []
             for item in new_items:
                 dynamic_id = str(item.get("dynamic_id") or "").strip()
-                if not dynamic_id or dynamic_id in existing_ids:
+                if not dynamic_id or dynamic_id in existing_ids or dynamic_id in deleted_ids:
                     continue
                 existing_ids.add(dynamic_id)
                 to_add.append(item)

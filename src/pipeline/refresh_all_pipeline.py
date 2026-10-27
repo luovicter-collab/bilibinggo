@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Literal
 
 from src.activity_store import append_activities, known_activity_ids
+from src.activity_exclusions import deleted_activity_ids
 from src.bilibili_client import BilibiliClient
 from src.lottery_enricher import (
     ENRICH_SKIP_REASON,
@@ -34,13 +35,15 @@ class PipelineResult:
     persisted_count: int
     skip_reasons: dict[str, int] = field(default_factory=dict)
     message: str = ""
+    failed_count: int = 0
+    failures: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 def _dedupe_new_dynamic_ids(raw_urls: list[str]) -> list[str]:
-    known = known_activity_ids()
+    known = known_activity_ids() | deleted_activity_ids()
     seen: set[str] = set()
     ordered: list[str] = []
     for raw_url in raw_urls:
@@ -59,6 +62,15 @@ def _collect_updated_links(ds_results: list[CheckResult]) -> list[str]:
             continue
         links.extend(result.activity_links or [])
     return links
+
+
+def _pipeline_failure(dynamic_id: str, stage: str, exc: BaseException) -> dict[str, str]:
+    detail = str(exc).strip() or type(exc).__name__
+    return {
+        "dynamic_id": dynamic_id,
+        "stage": stage,
+        "error": detail[:500],
+    }
 
 
 def run_new_links_pipeline(
@@ -84,6 +96,7 @@ def run_new_links_pipeline(
 
     participations = load_participations()
     skip_reasons: dict[str, int] = {}
+    failures: list[dict[str, str]] = []
     tasks: list[tuple[str, LotteryType]] = []
     classify_outcome_by_id: dict[str, ClassifyOutcome] = {}
     total = len(dynamic_ids)
@@ -94,7 +107,14 @@ def run_new_links_pipeline(
     with BilibiliClient() as shared_client:
         done = 0
         for dynamic_id in dynamic_ids:
-            outcome = classify_new_link(shared_client, dynamic_id)
+            try:
+                outcome = classify_new_link(shared_client, dynamic_id)
+            except Exception as exc:
+                failures.append(_pipeline_failure(dynamic_id, "分类", exc))
+                done += 1
+                if on_progress:
+                    on_progress(done, total, "分类进度")
+                continue
             done += 1
             if outcome.skipped:
                 reason = outcome.skip_reason or "skipped"
@@ -118,7 +138,13 @@ def run_new_links_pipeline(
             enriched_count=0,
             persisted_count=0,
             skip_reasons=skip_reasons,
-            message="新链接均已跳过（非抽奖/充电/失效）",
+            message=(
+                f"新链接处理完成，失败 {len(failures)} 条"
+                if failures
+                else "新链接均已跳过（非抽奖/充电/失效）"
+            ),
+            failed_count=len(failures),
+            failures=failures,
         )
 
     if on_progress:
@@ -159,26 +185,34 @@ def run_new_links_pipeline(
             }
             done = 0
             for future in as_completed(futures):
+                dynamic_id = futures[future]
                 try:
                     activity = future.result()
                 except EnrichSkippedError:
                     skip_reasons[ENRICH_SKIP_REASON] = skip_reasons.get(ENRICH_SKIP_REASON, 0) + 1
-                    done += 1
-                    if on_progress:
-                        on_progress(done, enrich_total, "详情进度")
-                    continue
                 except RuntimeError as exc:
                     if is_enrich_detail_skip_error(exc):
                         skip_reasons[ENRICH_SKIP_REASON] = skip_reasons.get(ENRICH_SKIP_REASON, 0) + 1
-                        done += 1
-                        if on_progress:
-                            on_progress(done, enrich_total, "详情进度")
-                        continue
-                    raise
-                if activity.skipped:
-                    raise RuntimeError(f"活动 {activity.dynamic_id} 不应为 skipped")
-                row = apply_initial_status(activity.to_dict())
-                enriched_rows.append(row)
+                    else:
+                        failures.append(_pipeline_failure(dynamic_id, "详情", exc))
+                except Exception as exc:
+                    failures.append(_pipeline_failure(dynamic_id, "详情", exc))
+                else:
+                    if activity.skipped:
+                        failures.append(
+                            _pipeline_failure(
+                                dynamic_id,
+                                "详情",
+                                RuntimeError(f"活动 {activity.dynamic_id} 不应为 skipped"),
+                            )
+                        )
+                    else:
+                        try:
+                            row = apply_initial_status(activity.to_dict())
+                        except Exception as exc:
+                            failures.append(_pipeline_failure(dynamic_id, "状态", exc))
+                        else:
+                            enriched_rows.append(row)
                 done += 1
                 if on_progress:
                     on_progress(done, enrich_total, "详情进度")
@@ -204,7 +238,13 @@ def run_new_links_pipeline(
         enriched_count=len(enriched_rows),
         persisted_count=persisted,
         skip_reasons=skip_reasons,
-        message=f"新入库 {persisted} 条活动",
+        message=(
+            f"新入库 {persisted} 条活动，失败 {len(failures)} 条（已继续处理）"
+            if failures
+            else f"新入库 {persisted} 条活动"
+        ),
+        failed_count=len(failures),
+        failures=failures,
     )
 
 

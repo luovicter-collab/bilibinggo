@@ -145,7 +145,7 @@ export function formatProgressDetail(job) {
     if (!lanes.length) return "并行处理中，请稍候…";
     const { doneCount, activeLanes, failedCount } = summarizeTripleProgressLanes(lanes);
     if (failedCount > 0) {
-      return `已停止 ${doneCount}/${lanes.length} 完成 · ${failedCount} 个失败`;
+      return `继续处理中 ${doneCount}/${lanes.length} 完成 · ${failedCount} 个失败已跳过`;
     }
     if (activeLanes.length > 1) {
       return `并行进行中 ${doneCount}/${lanes.length} · ${activeLanes.length} 个活动同时执行`;

@@ -89,6 +89,16 @@ export const filterDrawWindowHint = document.getElementById("filter-draw-window-
 
 export const pagination = document.getElementById("pagination");
 
+export const deletedActivitiesToggle = document.getElementById("deleted-activities-toggle");
+
+export const deletedActivitiesCount = document.getElementById("deleted-activities-count");
+
+export const deletedActivitiesSection = document.getElementById("deleted-activities-section");
+
+export const deletedActivitiesList = document.getElementById("deleted-activities-list");
+
+export const deletedActivitiesClose = document.getElementById("deleted-activities-close");
+
 export const qrcodeModal = document.getElementById("qrcode-modal");
 
 export const qrcodeImg = document.getElementById("qrcode-img");

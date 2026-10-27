@@ -548,8 +548,23 @@
           <div class="panel activities-panel">
             <div class="panel-head panel-head-row">
               <p class="section-desc">未参加且已过期的活动会自动从列表隐藏，本地历史记录仍会保留。</p>
-              <button class="btn btn-ghost btn-compact btn-pill" data-action="refresh_status">刷新任务状态</button>
+              <div class="activity-head-actions">
+                <button type="button" class="btn btn-ghost btn-compact btn-pill" id="deleted-activities-toggle" aria-expanded="false">
+                  已删除 <span id="deleted-activities-count">0</span>
+                </button>
+                <button class="btn btn-ghost btn-compact btn-pill" data-action="refresh_status">刷新任务状态</button>
+              </div>
             </div>
+            <section class="deleted-activities-section" id="deleted-activities-section" hidden>
+              <div class="deleted-activities-head">
+                <div>
+                  <p class="eyebrow">忽略名单</p>
+                  <h3 class="deleted-activities-title">已删除活动</h3>
+                </div>
+                <button type="button" class="btn btn-ghost btn-compact" id="deleted-activities-close" aria-label="关闭已删除列表" title="关闭">×</button>
+              </div>
+              <div class="deleted-activities-list" id="deleted-activities-list"></div>
+            </section>
             <div class="triple-participate-bar" id="triple-participate-bar" data-tone="blocked">
               <div class="triple-participate-lead">
                 <p class="triple-participate-eyebrow">快捷操作</p>
@@ -621,4 +636,3 @@
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
-

@@ -122,6 +122,10 @@ def ensure_activity_participatable(
     lottery_type_hint: str | None = None,
 ) -> dict[str, Any]:
     """参与前检查：同步状态后必须为未参加且未结束。"""
+    from src.activity_exclusions import is_activity_deleted
+
+    if is_activity_deleted(dynamic_id):
+        raise RuntimeError("该活动已在已删除列表中，不会参与")
     item = refresh_activity_status_from_live(
         client,
         dynamic_id,

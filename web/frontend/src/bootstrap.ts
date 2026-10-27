@@ -4,7 +4,7 @@
 
 import { state } from "./state";
 import { bindOnboardingPanel, loadAccount, loadAccountExtras, logoutAccount, requestLogoutConfirm, syncProjectState } from "./account/index";
-import { bindFilterPills, loadActivities, loadSummary } from "./activities/index";
+import { bindDeletedActivityControls, bindFilterPills, loadActivities, loadSummary } from "./activities/index";
 import { bindAutoDock, fetchAutoStatus, setAutoDockOpen } from "./auto/index";
 import { sidebarLogoutBtn, sidebarRefreshBtn } from "./dom";
 import { bindActionButtons, setLogDockOpen, startPolling } from "./jobs/index";
@@ -26,6 +26,7 @@ export async function init() {
   bindNavigation();
   bindAutoDock();
   bindFilterPills();
+  bindDeletedActivityControls();
   bindParticipateSettings();
   bindSettingsDirtyTracking();
   bindLlmApiKeyToggle();

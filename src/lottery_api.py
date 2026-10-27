@@ -153,30 +153,40 @@ def _normalize_dynamic_item(item: dict) -> dict:
 
 
 def _fetch_opus_detail_item(client: BilibiliClient, dynamic_id: str) -> dict | None:
-    referer = opus_link(dynamic_id)
-    try:
-        data = client.get_json(
-            OPUS_DETAIL_URL,
-            {
-                "id": dynamic_id,
-                "features": OPUS_DETAIL_FEATURES,
-            },
-            referer=referer,
-            retries=2,
-        )
-    except Exception as exc:
-        logger.debug("opus/detail 请求失败 %s: %s", dynamic_id, exc)
-        return None
-    if data.get("code") != 0:
-        logger.debug(
-            "opus/detail 返回错误 %s: code=%s msg=%s",
-            dynamic_id,
-            data.get("code"),
-            data.get("message"),
-        )
-        return None
-    item = (data.get("data") or {}).get("item") or {}
-    return item or None
+    # B 站风控有时会按 Referer 命中；同一动态从 opus 页和旧动态页进入
+    # 的结果并不稳定。切换官方页面 Referer 可恢复正文接口，而不改变接口本身。
+    referers = (
+        opus_link(dynamic_id),
+        f"https://t.bilibili.com/{dynamic_id}",
+        "https://www.bilibili.com/",
+    )
+    for referer in referers:
+        try:
+            data = client.get_json(
+                OPUS_DETAIL_URL,
+                {
+                    "id": dynamic_id,
+                    "features": OPUS_DETAIL_FEATURES,
+                },
+                referer=referer,
+                retries=2,
+            )
+        except Exception as exc:
+            logger.debug("opus/detail 请求失败 %s referer=%s: %s", dynamic_id, referer, exc)
+            continue
+        if data.get("code") != 0:
+            logger.debug(
+                "opus/detail 返回错误 %s referer=%s: code=%s msg=%s",
+                dynamic_id,
+                referer,
+                data.get("code"),
+                data.get("message"),
+            )
+            continue
+        item = (data.get("data") or {}).get("item") or {}
+        if item:
+            return item
+    return None
 
 
 def is_upower_dynamic(item: dict | None) -> bool:
@@ -198,27 +208,41 @@ def probe_dynamic_detail_api(
     """请求 web-dynamic/v1/detail，返回 (item, code, message)。网络/限流失败时 code 为 None。"""
     if not is_detail_api_enabled():
         return None, None, ""
-    referer = opus_link(dynamic_id)
-    try:
-        data = client.get_json(
-            DYNAMIC_DETAIL_URL,
-            {"id": dynamic_id},
-            referer=referer,
-            retries=retries,
-        )
-    except Exception as exc:
-        logger.debug("dynamic/detail 请求失败 %s: %s", dynamic_id, exc)
-        return None, None, str(exc)
-    code = data.get("code")
-    try:
-        code_int = int(code) if code is not None else None
-    except (TypeError, ValueError):
-        code_int = None
-    message = str(data.get("message") or "")
-    if code_int != 0:
-        return None, code_int, message
-    item = (data.get("data") or {}).get("item") or None
-    return item, 0, message
+    referers = (
+        opus_link(dynamic_id),
+        f"https://t.bilibili.com/{dynamic_id}",
+        "https://www.bilibili.com/",
+    )
+    last_code: int | None = None
+    last_message = ""
+    last_error = ""
+    for referer in referers:
+        try:
+            data = client.get_json(
+                DYNAMIC_DETAIL_URL,
+                {"id": dynamic_id},
+                referer=referer,
+                retries=retries,
+            )
+        except Exception as exc:
+            last_error = str(exc)
+            logger.debug("dynamic/detail 请求失败 %s referer=%s: %s", dynamic_id, referer, exc)
+            continue
+        code = data.get("code")
+        try:
+            code_int = int(code) if code is not None else None
+        except (TypeError, ValueError):
+            code_int = None
+        message = str(data.get("message") or "")
+        last_code, last_message = code_int, message
+        if code_int != 0:
+            continue
+        item = (data.get("data") or {}).get("item") or None
+        if item:
+            return item, 0, message
+    if last_code is not None:
+        return None, last_code, last_message
+    return None, None, last_error
 
 
 def _fetch_dynamic_api_item(

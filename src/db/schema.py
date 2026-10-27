@@ -11,7 +11,7 @@ from src.db.models import SchemaMeta
 # 确保全部表注册到 metadata
 from src.db import models as _models  # noqa: F401
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _JOB_V2_COLUMNS: tuple[tuple[str, str], ...] = (
     ("label", "TEXT NOT NULL DEFAULT ''"),
@@ -43,8 +43,52 @@ def migrate_v1_to_v2(session: Session) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_created_at ON jobs(created_at)"))
 
 
+def migrate_v2_to_v3(session: Session) -> None:
+    """新增用户删除名单与自动参与失败名单。create_all 后仍保持幂等。"""
+    conn = session.connection()
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS deleted_activities (
+                dynamic_id VARCHAR(32) NOT NULL PRIMARY KEY,
+                activity_title VARCHAR NOT NULL DEFAULT '',
+                source_url VARCHAR,
+                lottery_type VARCHAR,
+                prize VARCHAR NOT NULL DEFAULT '',
+                deleted_at INTEGER NOT NULL DEFAULT 0,
+                activity_snapshot_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_deleted_activities_deleted_at "
+            "ON deleted_activities(deleted_at)"
+        )
+    )
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS auto_participation_failures (
+                dynamic_id VARCHAR(32) NOT NULL PRIMARY KEY,
+                failed_at INTEGER NOT NULL DEFAULT 0,
+                message VARCHAR NOT NULL DEFAULT ''
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_auto_participation_failures_failed_at "
+            "ON auto_participation_failures(failed_at)"
+        )
+    )
+
+
 _MIGRATIONS: dict[int, Callable[[Session], None]] = {
     1: migrate_v1_to_v2,
+    2: migrate_v2_to_v3,
 }
 
 
@@ -64,6 +108,17 @@ def _jobs_table_has_v2_columns(session: Session) -> bool:
 def _database_matches_code_schema(session: Session) -> bool:
     if SCHEMA_VERSION >= 2 and not _jobs_table_has_v2_columns(session):
         return False
+    if SCHEMA_VERSION >= 3:
+        conn = session.connection()
+        required = {"deleted_activities", "auto_participation_failures"}
+        existing = {
+            str(row[0])
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+        if not required.issubset(existing):
+            return False
     return True
 
 

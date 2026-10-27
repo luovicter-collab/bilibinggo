@@ -14,6 +14,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from src.app_logging import get_logger, setup_logging
 from src.app_paths import __version__, ensure_user_dirs
 from src.bilibili_login import QR_IMAGE_PATH
+from src.activity_exclusions import delete_activity, restore_activity
 from src.llm_client import test_llm_connection
 from src.llm_settings import (
     build_llm_config_from_inputs,
@@ -41,6 +42,7 @@ from web.account_service import ack_at_unread_notice, clear_login_cookie, get_ac
 from web.activity_service import (
     ACTIVITY_PAGE_SIZE,
     get_summary,
+    list_deleted_activity_rows,
     list_activities,
     summarize_triple_participate_targets,
 )
@@ -263,6 +265,31 @@ def api_triple_participate_targets(
         sort=sort,
         order=order,
     )
+
+
+@app.get("/api/activities/deleted", tags=["stable"])
+def api_deleted_activities() -> dict[str, Any]:
+    return list_deleted_activity_rows()
+
+
+@app.delete("/api/activities/{dynamic_id}", response_model=OkResponse, tags=["stable"])
+def api_delete_activity(dynamic_id: str) -> dict[str, Any]:
+    if not is_valid_dynamic_id(dynamic_id):
+        raise AppError(ErrorCode.VALIDATION_ERROR, "活动 ID 无效")
+    deleted = delete_activity(dynamic_id)
+    if deleted is None:
+        raise AppError(ErrorCode.NOT_FOUND, "未找到该活动")
+    return {"ok": True, "deleted": deleted}
+
+
+@app.post("/api/activities/{dynamic_id}/restore", response_model=OkResponse, tags=["stable"])
+def api_restore_activity(dynamic_id: str) -> dict[str, Any]:
+    if not is_valid_dynamic_id(dynamic_id):
+        raise AppError(ErrorCode.VALIDATION_ERROR, "活动 ID 无效")
+    restored = restore_activity(dynamic_id)
+    if restored is None:
+        raise AppError(ErrorCode.NOT_FOUND, "该活动不在已删除列表中")
+    return {"ok": True, "restored": {"dynamic_id": dynamic_id}}
 
 
 @app.post("/api/jobs", response_model=JobStartOut, tags=["stable"])

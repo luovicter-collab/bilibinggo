@@ -93,3 +93,47 @@ def test_fetch_dynamic_detail_opus_fallback(monkeypatch) -> None:
     item = fetch_dynamic_detail(FakeClient(), "1212858623676383239")
     assert item is not None
     assert extract_repost_count_from_detail(item) == 99
+
+
+def test_opus_detail_retries_with_legacy_dynamic_referer() -> None:
+    from src.lottery_api import _fetch_opus_detail_item
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.referers: list[str | None] = []
+
+        def get_json(self, url, params=None, referer=None, retries=1):
+            self.referers.append(referer)
+            if referer and referer.startswith("https://t.bilibili.com/"):
+                return {"code": 0, "data": {"item": {"modules": []}}}
+            return {"code": -352, "message": "-352"}
+
+    client = FakeClient()
+    assert _fetch_opus_detail_item(client, "1235221925682217012") is not None
+    assert client.referers[:2] == [
+        "https://www.bilibili.com/opus/1235221925682217012",
+        "https://t.bilibili.com/1235221925682217012",
+    ]
+
+
+def test_probe_detail_retries_with_legacy_dynamic_referer() -> None:
+    from src.lottery_api import probe_dynamic_detail_api
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.referers: list[str | None] = []
+
+        def get_json(self, url, params=None, referer=None, retries=1):
+            self.referers.append(referer)
+            if referer and referer.startswith("https://t.bilibili.com/"):
+                return {"code": 0, "message": "0", "data": {"item": {"type": "DYNAMIC_TYPE_DRAW"}}}
+            return {"code": -352, "message": "-352"}
+
+    client = FakeClient()
+    item, code, _ = probe_dynamic_detail_api(client, "1235221925682217012", retries=0)
+    assert code == 0
+    assert item and item["type"] == "DYNAMIC_TYPE_DRAW"
+    assert client.referers[:2] == [
+        "https://www.bilibili.com/opus/1235221925682217012",
+        "https://t.bilibili.com/1235221925682217012",
+    ]

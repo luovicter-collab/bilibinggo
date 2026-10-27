@@ -1563,6 +1563,67 @@ html.sidebar-init-collapsed .system-btn {
   overflow: hidden;
 }
 
+.activity-head-actions,
+.activity-actions,
+.deleted-activity-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.activity-actions {
+  flex-wrap: nowrap;
+}
+
+.activity-delete-btn {
+  color: var(--danger);
+}
+
+.deleted-activities-section {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.deleted-activities-head,
+.deleted-activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.deleted-activities-title {
+  margin: 2px 0 0;
+  font-size: 16px;
+}
+
+.deleted-activities-list {
+  display: grid;
+  margin-top: 10px;
+}
+
+.deleted-activity-row {
+  min-height: 58px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.deleted-activity-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.deleted-activity-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .view-section {
   display: none;
 }
@@ -6821,6 +6882,20 @@ body.job-running .main-shell .topbar {
 }
 
 @media (max-width: 720px) {
+  .deleted-activity-row,
+  .deleted-activities-head {
+    align-items: flex-start;
+  }
+
+  .deleted-activity-row {
+    flex-direction: column;
+  }
+
+  .deleted-activity-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
   .account-hero-stats {
     row-gap: 14px;
   }

@@ -5,9 +5,10 @@
 import { state } from "../state";
 import { fetchJSON } from "../api/client";
 import { isSetupComplete } from "../account/index";
-import { activitiesBody, activitiesCards, filterDrawWindowHint, filterResultSummary, pagination, statsGrid } from "../dom";
+import { activitiesBody, activitiesCards, deletedActivitiesClose, deletedActivitiesCount, deletedActivitiesList, deletedActivitiesSection, deletedActivitiesToggle, filterDrawWindowHint, filterResultSummary, pagination, statsGrid } from "../dom";
 import { bindActionButtons, updateJobUI } from "../jobs/index";
 import { showToast } from "../shell/toast";
+import { openAppConfirm } from "../shell/confirm";
 import { activityStatusTone, badgeClass, formatFilterSummary, formatHeat, formatLastParticipation, formatLotteryTime, isLotterySoon, lotteryTypeTone } from "../utils/format";
 import { animateStatValue, flashFilterPill, playActivityListEnter, pulseFilterSummary } from "../utils/motion";
 import { escapeHtml, truncateText } from "../utils/text";
@@ -49,6 +50,14 @@ export function buildActivityParticipateBtn(item) {
   return `<span class="caption">—</span>`;
 }
 
+export function buildActivityDeleteBtn(item) {
+  return `<button type="button" class="btn btn-ghost btn-compact activity-delete-btn" data-delete-activity="${escapeHtml(item.dynamic_id)}" aria-label="删除活动" title="删除活动">删除</button>`;
+}
+
+export function buildActivityActions(item) {
+  return `<div class="activity-actions">${buildActivityParticipateBtn(item)}${buildActivityDeleteBtn(item)}</div>`;
+}
+
 export function buildActivityLastNote(item) {
   if (!item.last_participation) return "";
   return `<div class="last-result ${escapeHtml(item.last_participation.status || "")}">上次：${escapeHtml(formatLastParticipation(item.last_participation))}</div>`;
@@ -77,7 +86,7 @@ export function renderActivityTableRow(item, index = 0) {
       <td class="heat-cell"><span class="heat-pill${item.heat_missing ? " heat-pill-missing" : ""}">${formatHeat(item)}</span></td>
       <td class="chip-cell"><span class="${badgeClass(item.activity_status)}">${escapeHtml(item.activity_status)}</span></td>
       <td class="time-cell"><span class="time-pill${soon ? " is-soon" : ""}">${escapeHtml(formatLotteryTime(item.lottery_time))}</span></td>
-      <td class="chip-cell action-cell">${buildActivityParticipateBtn(item)}</td>
+      <td class="chip-cell action-cell">${buildActivityActions(item)}</td>
     </tr>`;
 }
 
@@ -101,7 +110,7 @@ export function renderActivityCard(item, index = 0) {
       </div>
       <div class="activity-card-actions">
         ${buildActivityLink(item)}
-        ${buildActivityParticipateBtn(item)}
+        ${buildActivityActions(item)}
       </div>
     </article>`;
 }
@@ -154,9 +163,102 @@ export function renderActivities(payload) {
 export async function loadSummary() {
   const summary = await fetchJSON("/api/summary");
   renderStats(summary);
+  if (deletedActivitiesCount) deletedActivitiesCount.textContent = String(summary.deleted_count || 0);
   renderSources(summary.sources);
   updateJobUI(summary.job || { state: "idle" });
   return summary.job;
+}
+
+export function renderDeletedActivities(payload) {
+  if (!deletedActivitiesList) return;
+  const items = payload?.items || [];
+  if (deletedActivitiesCount) deletedActivitiesCount.textContent = String(payload?.total || 0);
+  if (!items.length) {
+    deletedActivitiesList.innerHTML = `<div class="activity-empty">暂无已删除活动</div>`;
+    return;
+  }
+  deletedActivitiesList.innerHTML = items
+    .map(
+      (item) => `
+      <div class="deleted-activity-row" data-deleted-dynamic-id="${escapeHtml(item.dynamic_id)}">
+        <div class="deleted-activity-main">
+          <strong class="deleted-activity-name">${escapeHtml(item.activity_title || item.prize || item.dynamic_id)}</strong>
+          <span class="caption">${escapeHtml(item.lottery_type || "未知类型")} · ${escapeHtml(item.deleted_at_text || "—")}</span>
+        </div>
+        <div class="deleted-activity-actions">
+          ${item.source_url ? `<a class="activity-link" href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener">打开动态</a>` : ""}
+          <button type="button" class="btn btn-secondary btn-compact btn-pill" data-restore-activity="${escapeHtml(item.dynamic_id)}">恢复</button>
+        </div>
+      </div>`
+    )
+    .join("");
+}
+
+export async function loadDeletedActivities() {
+  const payload = await fetchJSON("/api/activities/deleted");
+  renderDeletedActivities(payload);
+  return payload;
+}
+
+export async function deleteActivity(dynamicId) {
+  const row = document.querySelector(`[data-dynamic-id="${CSS.escape(dynamicId)}"]`);
+  const title = row?.querySelector(".activity-title, .activity-card-title")?.textContent?.trim() || dynamicId;
+  const confirmed = await openAppConfirm({
+    eyebrow: "活动管理",
+    title: "删除这个活动？",
+    desc: title,
+    bullets: ["活动将从当前列表移除", "后续更新和定时参与都会忽略该活动", "可在“已删除”列表中恢复"],
+    confirmLabel: "删除活动",
+    cancelLabel: "取消",
+    danger: true,
+  });
+  if (!confirmed) return;
+  await fetchJSON(`/api/activities/${encodeURIComponent(dynamicId)}`, { method: "DELETE" });
+  showToast("活动已删除，后续任务将忽略它", "success");
+  state.page = 1;
+  await Promise.all([loadActivities(), loadSummary(), loadDeletedActivities()]);
+}
+
+export async function restoreActivity(dynamicId) {
+  await fetchJSON(`/api/activities/${encodeURIComponent(dynamicId)}/restore`, { method: "POST" });
+  showToast("活动已恢复", "success");
+  state.page = 1;
+  await Promise.all([loadActivities(), loadSummary(), loadDeletedActivities()]);
+}
+
+export function bindDeletedActivityControls() {
+  const toggleDeleted = async (visible) => {
+    if (!deletedActivitiesSection || !deletedActivitiesToggle) return;
+    deletedActivitiesSection.hidden = !visible;
+    deletedActivitiesToggle.setAttribute("aria-expanded", visible ? "true" : "false");
+    if (visible) {
+      try {
+        await loadDeletedActivities();
+      } catch (error) {
+        showToast(String(error.message || error), "error");
+      }
+    }
+  };
+  deletedActivitiesToggle?.addEventListener("click", () => {
+    toggleDeleted(Boolean(deletedActivitiesSection?.hidden));
+  });
+  deletedActivitiesClose?.addEventListener("click", () => toggleDeleted(false));
+  const activityClickHandler = (event) => {
+    const button = event.target.closest("[data-delete-activity]");
+    if (!button) return;
+    deleteActivity(button.dataset.deleteActivity).catch((error) => {
+      showToast(String(error.message || error), "error");
+    });
+  };
+  activitiesBody?.addEventListener("click", activityClickHandler);
+  activitiesCards?.addEventListener("click", activityClickHandler);
+  deletedActivitiesList?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-restore-activity]");
+    if (!button) return;
+    restoreActivity(button.dataset.restoreActivity).catch((error) => {
+      showToast(String(error.message || error), "error");
+    });
+  });
 }
 
 export function setFilterPillGroup(selector, activeButton) {

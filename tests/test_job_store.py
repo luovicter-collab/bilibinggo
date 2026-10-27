@@ -19,13 +19,13 @@ from src.job_store import (
 )
 
 
-def test_schema_version_is_v2(isolated_home: Path) -> None:
+def test_schema_version_is_v3(isolated_home: Path) -> None:
     _ = isolated_home
-    assert SCHEMA_VERSION == 2
+    assert SCHEMA_VERSION == 3
     with session_scope() as session:
         meta = session.get(SchemaMeta, 1)
         assert meta is not None
-        assert int(meta.version) == 2
+        assert int(meta.version) == 3
 
 
 def test_insert_progress_finish_roundtrip(isolated_home: Path) -> None:
@@ -127,14 +127,14 @@ def test_sanitize_params_strips_secrets(isolated_home: Path) -> None:
     assert cleaned["nested"]["ok"] == 1
 
 
-def test_migrate_v1_to_v2_idempotent(isolated_home: Path) -> None:
+def test_schema_migrations_are_idempotent(isolated_home: Path) -> None:
     _ = isolated_home
     init_db()
     init_db()
     with session_scope() as session:
         meta = session.get(SchemaMeta, 1)
         assert meta is not None
-        assert int(meta.version) == 2
+        assert int(meta.version) == 3
         # 新列可写
         row = JobRow(
             action="login",

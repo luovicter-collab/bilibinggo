@@ -3,6 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from src.activity_status import resolve_activity_status
+from src.activity_exclusions import (
+    auto_failed_activity_ids,
+    is_activity_deleted,
+    load_deleted_activities,
+)
 from src.activity_store import load_payload
 from src.db.snapshots import load_ds_check_dict, load_watch_sync_dict
 from src.draw_reminder import matches_draw_window_filter
@@ -236,6 +241,7 @@ def get_summary() -> dict[str, Any]:
             }
         )
     last_pipeline = get_last_pipeline_persisted()
+    deleted_count = len(load_deleted_activities())
     return {
         "enriched_at": enriched.get("updated_at") or enriched.get("enriched_at"),
         "total_count": len(activities),
@@ -243,6 +249,7 @@ def get_summary() -> dict[str, Any]:
         "last_pipeline_sync": last_pipeline,
         "user_status_counts": status_counts,
         "counts": draw_counts,
+        "deleted_count": deleted_count,
         "sources": sources,
     }
 
@@ -354,16 +361,18 @@ def _pick_triple_from_rows(
     rows: list[dict[str, Any]],
     *,
     limit: int = PARTICIPATE_TRIPLE_LIMIT,
+    exclude_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     targets: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    excluded = exclude_ids or set()
     for row in rows:
         if str(row.get("activity_status") or "") != "未参加":
             continue
         if not row.get("can_participate"):
             continue
         dynamic_id = str(row.get("dynamic_id") or "").strip()
-        if not is_valid_dynamic_id(dynamic_id) or dynamic_id in seen_ids:
+        if not is_valid_dynamic_id(dynamic_id) or dynamic_id in seen_ids or dynamic_id in excluded:
             continue
         row_lottery_type = str(row.get("lottery_type") or "")
         if row_lottery_type not in PARTICIPATABLE_TYPES:
@@ -405,6 +414,7 @@ def pick_triple_participate_targets(
     sort: str | None = None,
     order: str | None = None,
     limit: int = PARTICIPATE_TRIPLE_LIMIT,
+    exclude_auto_failures: bool = False,
 ) -> list[dict[str, Any]]:
     """按当前列表筛选与排序，取最前面可参与的未参加活动（默认最多 3 个）。"""
     rows = _filtered_activity_rows(
@@ -416,7 +426,8 @@ def pick_triple_participate_targets(
         sort=sort,
         order=order,
     )
-    return _pick_triple_from_rows(rows, limit=limit)
+    excluded = auto_failed_activity_ids() if exclude_auto_failures else set()
+    return _pick_triple_from_rows(rows, limit=limit, exclude_ids=excluded)
 
 
 def summarize_triple_participate_targets(
@@ -481,6 +492,8 @@ def list_activities(
 
 
 def lookup_lottery_type(dynamic_id: str) -> str:
+    if is_activity_deleted(dynamic_id):
+        raise RuntimeError(f"活动 {dynamic_id} 已删除，不会参与")
     enriched = _load_activities_payload()
     for item in enriched.get("activities") or []:
         if str(item.get("dynamic_id") or "") == dynamic_id:
@@ -488,6 +501,14 @@ def lookup_lottery_type(dynamic_id: str) -> str:
             if lottery_type in PARTICIPATABLE_TYPES:
                 return lottery_type
     raise RuntimeError(f"未找到活动 {dynamic_id} 的类型信息")
+
+
+def list_deleted_activity_rows() -> dict[str, Any]:
+    items = load_deleted_activities()
+    for item in items:
+        deleted_at = int(item.get("deleted_at") or 0)
+        item["deleted_at_text"] = format_timestamp(deleted_at) if deleted_at else "—"
+    return {"total": len(items), "items": items}
 
 
 def resolve_participate_lottery_type(dynamic_id: str, *, hint: str | None = None) -> str:

@@ -164,6 +164,16 @@ def test_pick_triple_participate_targets_respects_limit() -> None:
     assert targets[0]["dynamic_id"] == _id(1)
 
 
+def test_pick_triple_participate_targets_excludes_prior_auto_failures() -> None:
+    rows = [_row(_id(i), can_participate=True) for i in range(1, 5)]
+    with patch("web.activity_service._filtered_activity_rows", return_value=rows), patch(
+        "web.activity_service.auto_failed_activity_ids",
+        return_value={_id(1), _id(3)},
+    ):
+        targets = pick_triple_participate_targets(exclude_auto_failures=True)
+    assert [item["dynamic_id"] for item in targets] == [_id(2), _id(4)]
+
+
 def test_summarize_triple_participate_targets() -> None:
     rows = [_row(_id(1), can_participate=True), _row(_id(2), can_participate=True)]
     with patch("web.activity_service._filtered_activity_rows", return_value=rows):
@@ -225,7 +235,7 @@ def test_run_action_participate_triple_concurrent(monkeypatch: pytest.MonkeyPatc
     assert len(payload["result"]["items"]) == 2
 
 
-def test_run_action_participate_triple_fail_fast_stops_other_targets() -> None:
+def test_run_action_participate_triple_failure_does_not_stop_other_targets() -> None:
     import time
 
     targets = [_row(_id(401), can_participate=True), _row(_id(402), can_participate=True)]
@@ -260,15 +270,18 @@ def test_run_action_participate_triple_fail_fast_stops_other_targets() -> None:
         patch("web.actions.refresh_local_activity_statuses"),
         patch("web.actions.BilibiliClient"),
     ):
-        with pytest.raises(RuntimeError, match="模拟参与失败"):
-            run_action("participate_triple", {}, on_progress=on_progress)
+        payload = run_action("participate_triple", {}, on_progress=on_progress)
 
     combined = "\n".join(progress_messages)
     assert "失败" in combined
-    assert "已停止" in combined
+    assert "已停止" not in combined
+    assert payload["ok"] is True
+    assert payload["result"]["joined"] == 1
+    assert payload["result"]["failed"] == 1
+    assert {item["status"] for item in payload["result"]["items"]} == {"joined", "failed"}
 
 
-def test_run_action_participate_triple_rejects_joined_with_failed_core_action() -> None:
+def test_run_action_participate_triple_records_failed_core_action() -> None:
     targets = [_row(_id(201), can_participate=True)]
     fake_payload = {
         "dynamic_id": _id(201),
@@ -288,8 +301,40 @@ def test_run_action_participate_triple_rejects_joined_with_failed_core_action() 
         patch("web.actions.refresh_local_activity_statuses"),
         patch("web.actions.BilibiliClient"),
     ):
-        with pytest.raises(RuntimeError):
-            run_action("participate_triple", {}, on_progress=lambda **_kwargs: None)
+        payload = run_action("participate_triple", {}, on_progress=lambda **_kwargs: None)
+
+    assert payload["ok"] is True
+    assert payload["result"]["joined"] == 0
+    assert payload["result"]["failed"] == 1
+    assert payload["result"]["items"][0]["status"] == "failed"
+
+
+def test_auto_triple_records_failed_target_for_future_exclusion(
+    isolated_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = isolated_home
+    targets = [_row(_id(501), can_participate=True)]
+
+    with (
+        patch("web.actions.pick_triple_participate_targets", return_value=targets) as pick,
+        patch("web.actions.ensure_activity_participatable"),
+        patch("web.actions._execute_participate", side_effect=RuntimeError("模拟自动失败")),
+        patch("web.actions.resolve_participate_lottery_type", return_value="互动抽奖"),
+        patch("web.actions.invalidate_activity_cache"),
+        patch("web.actions.refresh_local_activity_statuses"),
+        patch("web.actions.BilibiliClient"),
+    ):
+        payload = run_action(
+            "participate_triple",
+            {"from_auto": True},
+            on_progress=lambda **_kwargs: None,
+        )
+
+    from src.activity_exclusions import auto_failed_activity_ids
+
+    assert payload["result"]["failed"] == 1
+    assert _id(501) in auto_failed_activity_ids()
+    assert pick.call_args.kwargs["exclude_auto_failures"] is True
 
 
 def test_run_action_participate_triple_uses_mixed_progress_budget() -> None:

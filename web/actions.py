@@ -10,6 +10,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Callable
 
 from src.app_logging import get_logger
+from src.activity_exclusions import (
+    clear_auto_participation_failure,
+    record_auto_participation_failure,
+)
 from src.bilibili_client import BilibiliClient
 from src.bilibili_login import login_with_qrcode
 from src.fetch_activity_info import mark_enriched_joined
@@ -280,12 +284,20 @@ def _pipeline_log_lines(result: PipelineResult) -> list[str]:
     if result.skip_reasons:
         parts = [f"{reason} {count}" for reason, count in result.skip_reasons.items()]
         skip_detail = f"，跳过 {result.skipped_count} 条（{' / '.join(parts)}）"
-    return [
+    lines = [
         f"【新链接流水线】候选 {result.new_link_count} 条，"
         f"分类通过 {result.classified_count} 条，"
         f"详情 {result.enriched_count} 条，"
         f"入库 {result.persisted_count} 条{skip_detail}"
     ]
+    if result.failures:
+        lines.append(f"【失败汇总】{result.failed_count} 条链接处理失败，其余链接已继续完成")
+        for failure in result.failures:
+            lines.append(
+                f"【失败】{failure.get('dynamic_id') or '未知链接'} "
+                f"[{failure.get('stage') or '处理'}]：{failure.get('error') or '未知错误'}"
+            )
+    return lines
 
 
 def _run_ds_check(
@@ -510,6 +522,8 @@ def run_action(
         ]
         if pipeline_result.skip_reasons:
             summary_parts.append(f"跳过 {pipeline_result.skipped_count} 条")
+        if pipeline_result.failed_count:
+            summary_parts.append(f"失败 {pipeline_result.failed_count} 条（详见任务日志）")
 
         logger.info(
             "一键更新完成：新链接 %s，入库 %s",
@@ -621,6 +635,8 @@ def run_action(
         ]
         if pipeline_result.skip_reasons:
             summary_parts.append(f"跳过 {pipeline_result.skipped_count} 条")
+        if pipeline_result.failed_count:
+            summary_parts.append(f"失败 {pipeline_result.failed_count} 条（详见任务日志）")
 
         logger.info(
             "%s 更新完成：新链接 %s，入库 %s",
@@ -716,6 +732,8 @@ def run_action(
             f"新链接 {pipeline_result.new_link_count} 条",
             f"新入库 {pipeline_result.persisted_count} 条",
         ]
+        if pipeline_result.failed_count:
+            summary_parts.append(f"失败 {pipeline_result.failed_count} 条（详见任务日志）")
         logger.info(
             "监控用户更新完成：窗口 %s 条，入库 %s",
             watch_result.link_count,
@@ -796,6 +814,7 @@ def run_action(
             )
 
         mark_enriched_joined(dynamic_id)
+        clear_auto_participation_failure(dynamic_id)
         refresh_local_activity_statuses()
         logger.info("参与活动成功 %s", dynamic_id)
         action_log = format_participation_log(payload)
@@ -810,9 +829,12 @@ def run_action(
     if action == "participate_triple":
         _raise_if_cancelled(cancel_event)
 
-        filters = _list_filter_params(params)
-        targets = pick_triple_participate_targets(**filters)
         from_auto = bool(params.get("from_auto"))
+        filters = _list_filter_params(params)
+        targets = pick_triple_participate_targets(
+            **filters,
+            exclude_auto_failures=from_auto,
+        )
         if not targets:
             return {
                 "ok": True,
@@ -908,17 +930,6 @@ def run_action(
             )
             _emit_triple_progress(log_append=f"{title}：{message}")
 
-        def _mark_other_tasks_stopped(failed_id: str, *, reason: str) -> None:
-            skip_markers = ("失败", "参与成功", "完成", "成功", "已停止", "已取消")
-            with progress_lock:
-                for other_id in target_ids:
-                    if failed_id and other_id == failed_id:
-                        continue
-                    state = task_states.get(other_id, "")
-                    if any(marker in state for marker in skip_markers):
-                        continue
-                    task_states[other_id] = reason
-
         def _participate_triple_target(target: dict[str, Any]) -> dict[str, Any]:
             if cancel_event and cancel_event.is_set():
                 raise ValueError("任务已取消")
@@ -951,6 +962,7 @@ def run_action(
                 )
 
             mark_enriched_joined(dynamic_id)
+            clear_auto_participation_failure(dynamic_id)
             with progress_lock:
                 task_states[dynamic_id] = str(payload.get("message") or "参与成功")
             plan_entry = progress_plan.get(dynamic_id)
@@ -966,6 +978,7 @@ def run_action(
             }
 
         results: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
         _emit_triple_progress()
         with ThreadPoolExecutor(max_workers=PARTICIPATE_TRIPLE_WORKERS) as executor:
             # 每个 future 各自 copy_context：同一 Context 不能被多线程并发 enter
@@ -977,49 +990,67 @@ def run_action(
                 ): str(target.get("dynamic_id") or "")
                 for target in targets
             }
-            try:
-                for future in as_completed(future_to_id):
-                    dynamic_id = future_to_id[future]
-                    if cancel_event and cancel_event.is_set():
-                        raise ValueError("任务已取消")
-                    try:
-                        results.append(future.result())
-                    except Exception as exc:
-                        if cancel_event is not None:
-                            cancel_event.set()
-                        with progress_lock:
-                            task_states[dynamic_id] = f"失败：{exc}"
-                        _mark_other_tasks_stopped(dynamic_id, reason="已停止（其他活动失败）")
-                        _emit_triple_progress(log_append=f"{dynamic_id}：失败")
-                        for pending in future_to_id:
-                            pending.cancel()
-                        raise
-            finally:
+            for future in as_completed(future_to_id):
+                dynamic_id = future_to_id[future]
                 if cancel_event and cancel_event.is_set():
-                    _mark_other_tasks_stopped("", reason="已取消")
-                    _emit_triple_progress()
+                    raise ValueError("任务已取消")
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    if cancel_event and cancel_event.is_set():
+                        raise ValueError("任务已取消") from exc
+                    message = str(exc).strip() or "参与失败"
+                    target = next(
+                        (
+                            item
+                            for item in targets
+                            if str(item.get("dynamic_id") or "") == dynamic_id
+                        ),
+                        {},
+                    )
+                    title = str(target.get("activity_title") or dynamic_id)
+                    lottery_type = str(target.get("lottery_type") or "")
+                    failure_payload = {
+                        "dynamic_id": dynamic_id,
+                        "activity_title": title,
+                        "lottery_type": lottery_type,
+                        "status": "failed",
+                        "message": message,
+                        "actions": [],
+                    }
+                    failures.append(failure_payload)
+                    if from_auto:
+                        record_auto_participation_failure(dynamic_id, message)
+                    with progress_lock:
+                        task_states[dynamic_id] = f"失败：{message}（已跳过）"
+                        plan_entry = progress_plan.get(dynamic_id)
+                        if plan_entry:
+                            _, budget = plan_entry
+                            task_step_progress[dynamic_id] = budget
+                    _emit_triple_progress(log_append=f"{title}：失败，已跳过并继续其他活动")
 
         refresh_local_activity_statuses()
         results.sort(key=lambda item: target_ids.index(item["dynamic_id"]))
-        log_blocks = [format_participation_log(item["payload"]) for item in results]
-        message = f"三连参与完成：{len(results)} 个活动全部成功"
+        failures.sort(key=lambda item: target_ids.index(item["dynamic_id"]))
+        item_payloads = [item["payload"] for item in results] + failures
+        item_payloads.sort(key=lambda item: target_ids.index(str(item.get("dynamic_id") or "")))
+        log_blocks = [format_participation_log(item) for item in item_payloads]
+        if failures:
+            message = f"三连参与完成：成功 {len(results)} 个，失败 {len(failures)} 个（已跳过）"
+        else:
+            message = f"三连参与完成：{len(results)} 个活动全部成功"
         progress(step=total_steps, total=total_steps, message=message, log_append=message)
-        logger.info("三连参与成功 count=%s", len(results))
+        logger.info("三连参与完成 joined=%s failed=%s", len(results), len(failures))
         invalidate_activity_cache()
         return {
             "ok": True,
             "message": message,
             "result": {
-                "targets": [
-                    {
-                        "dynamic_id": item["dynamic_id"],
-                        "activity_title": item["activity_title"],
-                        "lottery_type": item["lottery_type"],
-                    }
-                    for item in results
-                ],
-                "items": [item["payload"] for item in results],
+                "targets": triple_target_items,
+                "items": item_payloads,
                 "joined": len(results),
+                "failed": len(failures),
+                "from_auto": from_auto,
             },
             "log": "\n\n".join(log_blocks).strip(),
         }

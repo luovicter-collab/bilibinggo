@@ -45,6 +45,28 @@ class ActivityRow(SQLModel, table=True):
     updated_at: int = 0
 
 
+class DeletedActivityRow(SQLModel, table=True):
+    __tablename__ = "deleted_activities"
+    __table_args__ = (Index("ix_deleted_activities_deleted_at", "deleted_at"),)
+
+    dynamic_id: str = Field(primary_key=True, max_length=32)
+    activity_title: str = ""
+    source_url: Optional[str] = None
+    lottery_type: Optional[str] = None
+    prize: str = ""
+    deleted_at: int = 0
+    activity_snapshot_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+
+
+class AutoParticipationFailureRow(SQLModel, table=True):
+    __tablename__ = "auto_participation_failures"
+    __table_args__ = (Index("ix_auto_participation_failures_failed_at", "failed_at"),)
+
+    dynamic_id: str = Field(primary_key=True, max_length=32)
+    failed_at: int = 0
+    message: str = ""
+
+
 class ParticipationRow(SQLModel, table=True):
     __tablename__ = "participations"
     __table_args__ = (Index("ix_participations_uid_status", "uid", "user_status"),)

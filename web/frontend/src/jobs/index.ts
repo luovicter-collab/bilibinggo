@@ -1027,7 +1027,7 @@ export function calcJobProgressPercent(job) {
 }
 
 export function setButtonsDisabled(disabled) {
-  document.querySelectorAll("[data-action]").forEach((button) => {
+  document.querySelectorAll("[data-action], [data-activity-delete]").forEach((button) => {
     button.disabled = disabled;
   });
 }

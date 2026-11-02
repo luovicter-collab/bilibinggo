@@ -13,6 +13,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.app_logging import get_logger, setup_logging
 from src.app_paths import __version__, ensure_user_dirs
+from src.activity_store import dismiss_activity
 from src.bilibili_login import QR_IMAGE_PATH
 from src.llm_client import test_llm_connection
 from src.llm_settings import (
@@ -263,6 +264,18 @@ def api_triple_participate_targets(
         sort=sort,
         order=order,
     )
+
+
+@app.delete("/api/activities/{dynamic_id}", response_model=OkResponse, tags=["stable"])
+def api_delete_activity(dynamic_id: str) -> OkResponse:
+    """从本地活动列表移除，并阻止后续刷新重新加入。"""
+    if not is_valid_dynamic_id(dynamic_id):
+        raise AppError(ErrorCode.VALIDATION_ERROR, "活动 ID 格式无效")
+    if runner.is_running():
+        raise AppError(ErrorCode.JOB_BUSY, "当前有任务正在运行，请等待任务结束后再删除活动")
+    if not dismiss_activity(dynamic_id):
+        raise AppError(ErrorCode.NOT_FOUND, "活动不存在或已被删除")
+    return OkResponse(ok=True)
 
 
 @app.post("/api/jobs", response_model=JobStartOut, tags=["stable"])

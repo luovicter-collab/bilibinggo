@@ -5,7 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from src.activity_store import activity_count, load_activities, replace_all_activities
+from src.activity_store import (
+    activity_count,
+    activity_exists,
+    append_activities,
+    dismiss_activity,
+    known_activity_ids,
+    load_activities,
+    replace_all_activities,
+    update_activity,
+)
 from src.db.activity_codec import activity_dict_to_row, row_to_activity_dict
 from src.db.engine import db_path, reset_engine_for_tests
 from src.db.import_json import EXIT_NONEMPTY, EXIT_SOURCE, ImportError as JsonImportError, run_import
@@ -75,6 +84,29 @@ def test_activity_crud_counts(isolated_home: Path) -> None:
     )
     assert activity_count() == 2
     assert {a["dynamic_id"] for a in load_activities()} == {"1", "2"}
+
+
+def test_dismissed_activity_cannot_be_restored_by_stale_writers(isolated_home: Path) -> None:
+    _ = isolated_home
+    item = {
+        "dynamic_id": "100000000000000001",
+        "lottery_type": "转发抽奖",
+        "draw_status": "active",
+        "activity_status": "未参加",
+    }
+    replace_all_activities([item])
+
+    assert dismiss_activity(item["dynamic_id"]) is True
+    assert activity_exists(item["dynamic_id"]) is False
+    assert activity_count() == 0
+    assert item["dynamic_id"] in known_activity_ids()
+
+    # 数据源刷新、状态刷新与参与完成写回都不能让已移除活动复活。
+    assert append_activities([item]) == 0
+    replace_all_activities([item])
+    update_activity(item["dynamic_id"], item)
+    assert load_activities() == []
+    assert dismiss_activity(item["dynamic_id"]) is False
 
 
 def test_state_checkpoint_roundtrip(isolated_home: Path) -> None:

@@ -3,9 +3,11 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from sqlalchemy import text
+
 from src.db.schema import SCHEMA_VERSION, init_db
 from src.db.session import session_scope
-from src.db.models import JobRow, SchemaMeta
+from src.db.models import ActivityDismissalRow, JobRow, SchemaMeta
 from src.job_store import (
     finish_job,
     get_job,
@@ -19,13 +21,13 @@ from src.job_store import (
 )
 
 
-def test_schema_version_is_v2(isolated_home: Path) -> None:
+def test_schema_version_is_v3(isolated_home: Path) -> None:
     _ = isolated_home
-    assert SCHEMA_VERSION == 2
+    assert SCHEMA_VERSION == 3
     with session_scope() as session:
         meta = session.get(SchemaMeta, 1)
         assert meta is not None
-        assert int(meta.version) == 2
+        assert int(meta.version) == 3
 
 
 def test_insert_progress_finish_roundtrip(isolated_home: Path) -> None:
@@ -127,14 +129,14 @@ def test_sanitize_params_strips_secrets(isolated_home: Path) -> None:
     assert cleaned["nested"]["ok"] == 1
 
 
-def test_migrate_v1_to_v2_idempotent(isolated_home: Path) -> None:
+def test_schema_migrations_are_idempotent(isolated_home: Path) -> None:
     _ = isolated_home
     init_db()
     init_db()
     with session_scope() as session:
         meta = session.get(SchemaMeta, 1)
         assert meta is not None
-        assert int(meta.version) == 2
+        assert int(meta.version) == 3
         # 新列可写
         row = JobRow(
             action="login",
@@ -149,3 +151,25 @@ def test_migrate_v1_to_v2_idempotent(isolated_home: Path) -> None:
             finished_at=1,
         )
         session.add(row)
+
+
+def test_migrate_v2_to_v3_creates_activity_dismissal_table(isolated_home: Path) -> None:
+    _ = isolated_home
+    with session_scope() as session:
+        session.execute(text("DROP TABLE activity_dismissals"))
+        meta = session.get(SchemaMeta, 1)
+        assert meta is not None
+        meta.version = 2
+
+    init_db()
+
+    with session_scope() as session:
+        meta = session.get(SchemaMeta, 1)
+        assert meta is not None
+        assert int(meta.version) == 3
+        session.add(
+            ActivityDismissalRow(
+                dynamic_id="100000000000000001",
+                dismissed_at=1,
+            )
+        )

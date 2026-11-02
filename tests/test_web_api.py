@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from src.activity_store import replace_all_activities
 from web.app import app
 
 client = TestClient(app)
@@ -83,6 +84,54 @@ def test_activities_triple_targets_empty_for_joined_filter() -> None:
     data = resp.json()
     assert data["triple_targets"]["count"] == 0
     assert data["triple_targets"]["items"] == []
+
+
+def test_delete_activity_removes_it_from_list_and_triple_targets(isolated_home) -> None:
+    dynamic_id = "100000000000000001"
+    replace_all_activities(
+        [
+            {
+                "dynamic_id": dynamic_id,
+                "source_url": f"https://www.bilibili.com/opus/{dynamic_id}",
+                "lottery_type": "转发抽奖",
+                "draw_status": "active",
+                "activity_status": "未参加",
+                "lottery_time": 9_999_999_999,
+                "prizes": [{"description": "测试奖品", "winner_count": 1}],
+            }
+        ]
+    )
+
+    before = client.get("/api/activities", params={"status": "未参加"}).json()
+    assert before["total"] == 1
+    assert before["triple_targets"]["items"][0]["dynamic_id"] == dynamic_id
+
+    resp = client.delete(f"/api/activities/{dynamic_id}")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    after = client.get("/api/activities", params={"status": "未参加"}).json()
+    assert after["total"] == 0
+    assert after["triple_targets"]["items"] == []
+    assert client.get("/api/summary").json()["total_count"] == 0
+
+    repeated = client.delete(f"/api/activities/{dynamic_id}")
+    assert repeated.status_code == 404
+    assert repeated.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_delete_activity_rejects_invalid_dynamic_id() -> None:
+    resp = client.delete("/api/activities/not-valid")
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_delete_activity_rejects_while_job_is_running() -> None:
+    dynamic_id = "100000000000000001"
+    with patch("web.app.runner.is_running", return_value=True):
+        resp = client.delete(f"/api/activities/{dynamic_id}")
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "JOB_BUSY"
 
 
 def test_settings_includes_participate_text_mode() -> None:

@@ -6,12 +6,12 @@ from sqlalchemy import text
 from sqlmodel import Session, SQLModel
 
 from src.db.engine import get_engine
-from src.db.models import SchemaMeta
+from src.db.models import ActivityDismissalRow, SchemaMeta
 
 # 确保全部表注册到 metadata
 from src.db import models as _models  # noqa: F401
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _JOB_V2_COLUMNS: tuple[tuple[str, str], ...] = (
     ("label", "TEXT NOT NULL DEFAULT ''"),
@@ -43,8 +43,14 @@ def migrate_v1_to_v2(session: Session) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_jobs_created_at ON jobs(created_at)"))
 
 
+def migrate_v2_to_v3(session: Session) -> None:
+    """新增活动手动移除墓碑表；checkfirst 保证迁移可重复执行。"""
+    ActivityDismissalRow.__table__.create(bind=session.connection(), checkfirst=True)
+
+
 _MIGRATIONS: dict[int, Callable[[Session], None]] = {
     1: migrate_v1_to_v2,
+    2: migrate_v2_to_v3,
 }
 
 

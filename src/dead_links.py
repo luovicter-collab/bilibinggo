@@ -4,7 +4,7 @@ from typing import Iterable
 
 import httpx
 
-from src.activity_store import known_activity_ids, remove_activity_ids
+from src.activity_store import active_activity_ids, remove_activity_ids
 from src.source_outputs import SOURCE_OUTPUTS  # noqa: F401 — re-export for scripts/tests
 
 _DELETED_DETAIL_MARKERS = (
@@ -90,4 +90,4 @@ def purge_dynamic_ids(dynamic_ids: Iterable[str]) -> list[str]:
 
 def collect_all_local_dynamic_ids() -> list[str]:
     """汇总本地活动库中的动态 ID。"""
-    return sorted(known_activity_ids())
+    return sorted(active_activity_ids())

@@ -8,7 +8,7 @@ from sqlalchemy import delete, func
 from sqlmodel import col, select
 
 from src.db.activity_codec import activity_dict_to_row, row_to_activity_dict
-from src.db.models import ActivityRow
+from src.db.models import ActivityDismissalRow, ActivityRow
 from src.db.session import session_scope
 from src.lottery_classifier import is_charging_lottery_activity
 from src.lottery_time import resolve_effective_lottery_time_unix
@@ -85,10 +85,16 @@ def _list_activity_dicts(session) -> list[dict]:
     return [row_to_activity_dict(row) for row in rows]
 
 
+def _dismissed_activity_ids(session) -> set[str]:
+    rows = session.exec(select(ActivityDismissalRow.dynamic_id)).all()
+    return {str(dynamic_id) for dynamic_id in rows if dynamic_id}
+
+
 def _upsert_activities(session, items: list[dict], *, updated_at: int) -> None:
+    dismissed_ids = _dismissed_activity_ids(session)
     for item in items:
         dynamic_id = str(item.get("dynamic_id") or "").strip()
-        if not dynamic_id:
+        if not dynamic_id or dynamic_id in dismissed_ids:
             continue
         row = activity_dict_to_row(item, updated_at=updated_at)
         existing = session.get(ActivityRow, dynamic_id)
@@ -159,10 +165,17 @@ def load_activities() -> list[dict]:
     return [item for item in (load_payload().get("activities") or []) if isinstance(item, dict)]
 
 
-def known_activity_ids() -> set[str]:
+def active_activity_ids() -> set[str]:
     with session_scope() as session:
         rows = session.exec(select(ActivityRow.dynamic_id)).all()
         return {str(item) for item in rows if item}
+
+
+def known_activity_ids() -> set[str]:
+    with session_scope() as session:
+        rows = session.exec(select(ActivityRow.dynamic_id)).all()
+        active_ids = {str(item) for item in rows if item}
+        return active_ids | _dismissed_activity_ids(session)
 
 
 def activity_exists(dynamic_id: str) -> bool:
@@ -179,6 +192,7 @@ def append_activities(new_items: list[dict]) -> int:
     with _activity_lock:
         with session_scope() as session:
             existing_ids = set(session.exec(select(ActivityRow.dynamic_id)).all())
+            existing_ids.update(_dismissed_activity_ids(session))
             to_add: list[dict] = []
             for item in new_items:
                 dynamic_id = str(item.get("dynamic_id") or "").strip()
@@ -214,6 +228,30 @@ def remove_activity_ids(dynamic_ids: set[str]) -> int:
                     session.delete(row)
                     removed += 1
             return removed
+
+
+def dismiss_activity(dynamic_id: str) -> bool:
+    """从活动库移除并记录墓碑，阻止刷新或并发任务重新写回。"""
+    did = str(dynamic_id or "").strip()
+    if not did:
+        return False
+    with _activity_lock:
+        with session_scope() as session:
+            row = session.get(ActivityRow, did)
+            if row is None:
+                return False
+            session.delete(row)
+            tombstone = session.get(ActivityDismissalRow, did)
+            if tombstone is None:
+                session.add(
+                    ActivityDismissalRow(
+                        dynamic_id=did,
+                        dismissed_at=int(time.time()),
+                    )
+                )
+            else:
+                tombstone.dismissed_at = int(time.time())
+            return True
 
 
 def update_activity(dynamic_id: str, item: dict) -> None:

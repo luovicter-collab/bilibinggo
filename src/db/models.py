@@ -45,6 +45,15 @@ class ActivityRow(SQLModel, table=True):
     updated_at: int = 0
 
 
+class ActivityDismissalRow(SQLModel, table=True):
+    """用户手动移除的活动；独立墓碑避免刷新或并发写回后复活。"""
+
+    __tablename__ = "activity_dismissals"
+
+    dynamic_id: str = Field(primary_key=True, max_length=32)
+    dismissed_at: int = 0
+
+
 class ParticipationRow(SQLModel, table=True):
     __tablename__ = "participations"
     __table_args__ = (Index("ix_participations_uid_status", "uid", "user_status"),)

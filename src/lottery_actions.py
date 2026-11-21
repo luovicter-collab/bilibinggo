@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Literal
 
+import httpx
+
 from src.bilibili_auth import get_login_uid, require_login
 from src.bilibili_client import BilibiliClient, api_code
 from src.lottery_api import fetch_dynamic_detail, fetch_notice_for_interact, fetch_opus_detail_item
@@ -20,7 +22,7 @@ FAV_LIST_URL = "https://api.bilibili.com/x/v3/fav/folder/created/list-all"
 FAV_RESOURCE_LIST_URL = "https://api.bilibili.com/x/v3/fav/resource/list"
 FAV_DEAL_URL = "https://api.bilibili.com/x/v3/fav/resource/deal"
 COSMO_SIMPLE_ACTION_URL = "https://api.bilibili.com/x/community/cosmo/interface/simple_action"
-REPOST_URL = "https://api.vc.bilibili.com/dynamic_repost/v1/dynamic_repost/repost"
+REPOST_URL = "https://api.bilibili.com/x/dynamic/feed/create/dyn"
 COMMENT_URL = "https://api.bilibili.com/x/v2/reply/add"
 REPLY_MAIN_URL = "https://api.bilibili.com/x/v2/reply/main"
 
@@ -398,24 +400,45 @@ def repost_dynamic(
     referer: str,
     content: str,
 ) -> ActionResult:
-    payload = client.post_form(
-        REPOST_URL,
-        {
-            "uid": str(my_uid),
-            "dynamic_id": dynamic_id,
-            "content": content[:233],
-            "ctrl": "[]",
-            "csrf": csrf,
-        },
-        referer=referer,
-        raise_on_code=False,
-    )
+    text = content[:233] or "转发动态"
+    try:
+        # This creates a public dynamic. Never replay an ambiguous submission.
+        payload = client.post_json(
+            REPOST_URL,
+            {
+                "dyn_req": {
+                    "content": {"contents": [{"raw_text": text, "type": 1, "biz_id": ""}]},
+                    "scene": 4,
+                    "meta": {"app_meta": {"from": "create.dynamic.web", "mobi_app": "web"}},
+                },
+                "web_repost_src": {"dyn_id_str": str(dynamic_id)},
+            },
+            params={"csrf": csrf, "platform": "web"},
+            referer=referer,
+            retries=0,
+            raise_on_code=False,
+        )
+    except (httpx.HTTPError, RuntimeError) as exc:
+        status = f"HTTP {exc.response.status_code}；" if isinstance(exc, httpx.HTTPStatusError) else ""
+        # Do not log the request URL: its query contains the CSRF token.
+        raise RuntimeError(
+            f"{status}转发结果未确认，未自动重试。请先到 B 站个人动态核对是否已发布，再决定是否重试。"
+        ) from None
+    if not isinstance(payload, dict):
+        raise RuntimeError("转发响应格式异常，未自动重试。请先到 B 站个人动态核对。")
     code = _api_code(payload)
     if code == 0:
-        return ActionResult("repost", True, content[:80])
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("转发响应缺少结果，未自动重试。请先到 B 站个人动态核对。")
+        result = data.get("result")
+        if result is not None and result != 0:
+            return ActionResult("repost", False, f"转发未成功 result={result}")
+        new_id = str(data.get("dyn_id_str") or data.get("dyn_id") or "")
+        if result == 0 or (new_id.isdecimal() and int(new_id) > 0):
+            return ActionResult("repost", True, text[:80])
+        raise RuntimeError("转发响应缺少成功标志，未自动重试。请先到 B 站个人动态核对。")
     message = _api_message(payload)
-    if "已" in message or "重复" in message:
-        return ActionResult("repost", True, "已转发")
     return ActionResult("repost", False, f"code={code} {message}".strip())
 
 

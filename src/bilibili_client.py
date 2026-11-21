@@ -299,6 +299,8 @@ class BilibiliClient:
                 resp = self._http_post(url, params=params or {}, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
+                if not isinstance(data, dict):
+                    raise RuntimeError("响应不是 JSON 对象")
                 code = data.get("code")
                 if code in (0, None):
                     return data
